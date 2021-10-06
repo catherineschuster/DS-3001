@@ -5,7 +5,7 @@
 #### Slide 21: Step 1: load packages and data ####
 
 # Install packages.
-install.packages("e1071")     #<- package used to run clustering analysis
+install.packages("devtools")     #<- package used to run clustering analysis
 
 # Load libraries.
 library(e1071)
@@ -25,14 +25,14 @@ library(help = "e1071")#<- learn about all the functionality of the package,
 
 #### Slide 22: Step 1: load packages and data ####
 
-house_votes_Dem = read_csv("data/house_votes_Dem.csv")
+house_votes_Dem = read_csv("~/Desktop/Fall 2021/DS 3001/DS-3001-Main/data/house_votes_Dem.csv")
 
 # What does the data look like?
 View(house_votes_Dem)
 str(house_votes_Dem)
 table(house_votes_Dem$party.labels)
 
-house_votes_Rep = read_csv("data/house_votes_Rep.csv")
+house_votes_Rep = read_csv("/Users/catherineschuster/Desktop/Fall 2021/DS 3001/DS-3001-Main/data/house_votes_Rep.csv")
 
 table(house_votes_Rep$party.labels)
 View(house_votes_Rep)

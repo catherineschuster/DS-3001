@@ -1,0 +1,730 @@
+---
+title: "ml_bootcamp"
+author: "Catherine Schuster"
+date: "9/29/2021"
+output:
+  html_document:
+    toc: TRUE
+    theme: journal
+    toc_float: TRUE
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, include=FALSE}
+library(tidyverse)
+library(psych)
+library(mltools)
+library(data.table)
+library(caret)
+library(C50)
+library(e1071)
+```
+
+# DATASET MODEL #1: NFL DATA 
+ 
+## Phase I
+```{r}
+#Independent Business Metric: The metric of interest is: Given game statistics of NFL players, can we predict what position (offense or defense) they play? Note that this is more of a playful metric that has fewer implications on the "business" of football or success of the NFL as a whole, as compared to say, predicting player ratings, team value, popularity, etc., would be.
+
+#Dataset Info: NFL Draft Player and Game Stats Data, with 9657 player entries as observations
+
+#Note that there are no qualitative variables to one hot encode
+```
+
+
+## Phase II
+### Data Preparation
+```{r}
+#Reading in NFL data 
+nfl_data <- read_csv('/Users/catherineschuster/Desktop/Fall 2021/DS 3001/DS-3001-Main/05_ml_bootcamp/NFL2.csv')
+view(nfl_data)
+
+#Removing variables that will not help predict player position
+#Removing Tkl because all values are 0
+drop <- c('Player','College', 'Tm', 'Rnd', 'Tkl')
+nfl_data <- nfl_data[,!(names(nfl_data) %in% drop)]
+
+#Recode target variable: defensive positions -> 0 and offensive positions -> 1
+unique(nfl_data[c("Pos")])
+nfl_data <- mutate(nfl_data, Pos=recode(Pos, 
+                                        'DE'= 0, 'LB'=0, 'DT'=0, 'G'=0, 'DB'=0, 
+                                        'WB'=0, 'NT'=0, 'DL'=0, 'DL'=0, 'P'=0, 'E'=0,
+                                        'RB'=1, 'QB'=1, 'WR'=1, 'C'=1, 'T'=1, 
+                                        'TE'=1, 'K'=1, 'FL'=1, 'FB'=1, 'OL'=1))
+nfl_data$Pos <- as.factor(nfl_data$Pos)
+str(nfl_data)
+```
+
+### Scale/Center/Normalizing
+```{r}
+#Normalize quantitative variables
+normalize <- function(x){
+ (x - min(x)) / (max(x) - min(x))
+}
+
+num_cols <- names(select_if(nfl_data, is.numeric))
+
+nfl_data[num_cols] <- as_tibble(lapply(nfl_data[num_cols], normalize))
+```
+
+
+### Prevalance 
+```{r}
+#Prevalence of offensive players
+
+prevalence <- table(nfl_data$Pos)[[2]]/length(nfl_data$Pos)
+prevalence # 0.4520037
+```
+
+### Initial Model Building: Decision Tree   
+```{r}
+
+part_index_1 <- caret::createDataPartition(nfl_data$Pos,
+                                           times=1,
+                                           p = 0.70,
+                                           groups=1,
+                                           list=FALSE)
+View(part_index_1)
+dim(nfl_data)
+
+#Create training, tuning, and test set
+train <- nfl_data[part_index_1,]
+tune_and_test <- nfl_data[-part_index_1, ]
+
+#Use function again to create the tuning set 
+tune_and_test_index <- createDataPartition(tune_and_test$Pos,
+                                           p = .5,
+                                           list = FALSE,
+                                           times = 1)
+
+tune <- tune_and_test[tune_and_test_index, ]
+test <- tune_and_test[-tune_and_test_index, ]
+
+dim(train)
+dim(tune)
+dim(test)
+
+```
+
+
+#### Cross validation
+```{r}
+#Cross validation process 
+fitControl <- trainControl(method = "repeatedcv",
+                          number = 10,
+                          repeats = 5, 
+                          returnResamp="all",
+                          savePredictions = 'final') 
+
+```
+
+#### Training and Evaluation 
+
+```{r}
+target_var <- c('Pos')
+features <- train[,!(names(train) %in% target_var)]
+target <- train[,"Pos"]
+
+View(target)
+
+str(features)
+
+set.seed(2001)
+nfl_mdl <- train(x=features,
+                y=target$Pos,
+                trControl=fitControl,
+                method="C5.0",
+                verbose=TRUE)
+
+nfl_mdl
+#Accuracy was used to select the optimal model using the largest value.
+#The final values used for the model were trials = 20, model = tree and winnow = TRUE
+```
+
+### Tune and Evaluation 
+```{r}
+nfl_predict = predict(nfl_mdl,tune,type= "raw")
+
+confusionMatrix(as.factor(nfl_predict), 
+                as.factor(tune$Pos), 
+                dnn=c("Prediction", "Actual"), 
+                mode = "sens_spec", positive = '1')
+
+# Confusion Matrix and Statistics
+# 
+#           Actual
+# Prediction   0   1
+#          0 759 137
+#          1  35 518
+#                                           
+#                Accuracy : 0.8813          
+#                  95% CI : (0.8635, 0.8975)
+#     No Information Rate : 0.548           
+#     P-Value [Acc > NIR] : < 2.2e-16       
+#                                           
+#                   Kappa : 0.7571          
+#                                           
+#  Mcnemar's Test P-Value : 1.348e-14       
+#                                           
+#             Sensitivity : 0.7908          
+#             Specificity : 0.9559          
+#          Pos Pred Value : 0.9367          
+#          Neg Pred Value : 0.8471          
+#              Prevalence : 0.4520          
+#          Detection Rate : 0.3575          
+#    Detection Prevalence : 0.3816          
+#       Balanced Accuracy : 0.8734          
+#                                           
+#        'Positive' Class : 1 
+
+varImp(nfl_mdl)
+
+```
+
+
+### Predict Using the Tuning Data
+```{r}
+grid <- expand.grid(.winnow = c(TRUE,FALSE), 
+                    .trials=c(20,30,40), 
+                    .model=c("tree","rules"))
+set.seed(2001)
+nfl_mdl_tune <- train(x=features,
+                y=target$Pos,
+                tuneGrid=grid,
+                trControl=fitControl,
+                method="C5.0",
+                verbose=TRUE)
+
+nfl_mdl_tune
+nfl_mdl
+#Accuracy was used to select the optimal model using the largest value.
+#The final values used for the model were trials = 20, model = tree and winnow
+# = FALSE.
+
+plot(nfl_mdl_tune)
+
+#Evaluate again with the tune data using the new model 
+nfl_predict_tune = predict(nfl_mdl_tune,tune,type= "raw")
+nfl_predict_tune
+
+confusionMatrix(as.factor(nfl_predict_tune), 
+                as.factor(tune$Pos), 
+                dnn=c("Prediction", "Actual"), 
+                mode = "sens_spec", positive = '1')
+
+# Confusion Matrix and Statistics
+# 
+#           Actual
+# Prediction   0   1
+#          0 747 132
+#          1  47 523
+#                                          
+#                Accuracy : 0.8765         
+#                  95% CI : (0.8584, 0.893)
+#     No Information Rate : 0.548          
+#     P-Value [Acc > NIR] : < 2.2e-16      
+#                                          
+#                   Kappa : 0.7478         
+#                                          
+#  Mcnemar's Test P-Value : 3.42e-10       
+#                                          
+#             Sensitivity : 0.7985         
+#             Specificity : 0.9408         
+#          Pos Pred Value : 0.9175         
+#          Neg Pred Value : 0.8498         
+#              Prevalence : 0.4520         
+#          Detection Rate : 0.3609         
+#    Detection Prevalence : 0.3934         
+#       Balanced Accuracy : 0.8696         
+#                                          
+#        'Positive' Class : 1      
+
+```
+
+##Summary of Findings and Performance Between the Two Models:
+The final model performed just about equal in most metrics compared to the inital model built from the training data. While prevalence did not change between the two models (Model prevalence 0.4520, compared to a true observed 0.4520037), the accuracy decreased, slightly, from .8813 in the initial model built from the training data to 0.8765 in the model built from the tuned data. I would like to look further into the bias and variance of each model, as this may be due to an underfitting or overfitting of the data. Moreover, the model performed very highly in terms of specificity (0.9408) and moderately high in terms of sensitivity (0.7985). This means the final model built from the training data was more successful at predicting true defensive players, and, with slightly less accurately, able to detect true offensive players. 
+
+Overall, I was surprised to see which variables were important in informing predictions about the target variable, player position. It was clear from the variable importance function that receiving yards, receptions, rushing attempts, targets, and percentage of completed passes were the most important features in predicting that the player holds an offensive position. As for any more meaningful insights, I don't know that the time we've had in class to cover this material has prepared me. However, id be interesting in learning about more techniques to discover and assess (perhaps through graphical representations or other metrics) real-world intepretations of the model's predictions.
+
+
+# DATASET MODEL #2: Breast Cancer 
+
+##Phase I
+```{r}
+#Independent Business Metric: Accurate and timely predictions about the malignancy of breast masses could potentially save patient lives and the uncertainty around the need for cancer treatment. Can we predict which masses are cancerous of incoming oncology patients?
+
+#Breast Cancer Wisconsin (Diagnostic) Data Set: 568 breast masses as observations, and 33 columns.
+```
+
+
+
+## Phase II
+### Data Preparation
+```{r}
+#Reading in Cancer data 
+cancer_data <- read_csv('/Users/catherineschuster/Desktop/Fall 2021/DS 3001/DS-3001-Main/05_ml_bootcamp/data.csv')
+view(cancer_data)
+
+#Removing variables that will not help predict malignancy 
+drop <- c('...33','id')
+cancer_data <- cancer_data[,!(names(cancer_data) %in% drop)]
+
+#Recode target variable: benign mass -> 0 and malignant mass -> 1
+cancer_data <- mutate(cancer_data, diagnosis=recode(diagnosis, 'B'= 0, 'M'=1))
+cancer_data$diagnosis <- as.factor(cancer_data$diagnosis)
+str(cancer_data)
+```
+
+### Scale/Center/Normalizing
+```{r}
+#Normalize quantitative variables
+normalize <- function(x){
+ (x - min(x)) / (max(x) - min(x))
+}
+
+num_cols <- names(select_if(cancer_data, is.numeric))
+
+cancer_data[num_cols] <- as_tibble(lapply(cancer_data[num_cols], normalize))
+```
+
+
+### Prevalance 
+```{r}
+#Prevalence of malignancy
+prevalence <- table(cancer_data$diagnosis)[[2]]/length(cancer_data$diagnosis)
+prevalence # 0.3732394
+```
+
+### Initial Model Building: Decision Tree   
+```{r}
+
+part_index_1 <- caret::createDataPartition(cancer_data$diagnosis,
+                                           times=1,
+                                           p = 0.70,
+                                           groups=1,
+                                           list=FALSE)
+View(part_index_1)
+dim(nfl_data)
+
+#Create training, tuning, and test set
+train <- cancer_data[part_index_1,]
+tune_and_test <- cancer_data[-part_index_1, ]
+
+#Use function again to create the tuning set 
+tune_and_test_index <- createDataPartition(tune_and_test$diagnosis,
+                                           p = .5,
+                                           list = FALSE,
+                                           times = 1)
+
+tune <- tune_and_test[tune_and_test_index, ]
+test <- tune_and_test[-tune_and_test_index, ]
+
+dim(train)
+dim(tune)
+dim(test)
+
+```
+
+
+#### Cross validation
+```{r}
+#Cross validation process 
+fitControl <- trainControl(method = "repeatedcv",
+                          number = 10,
+                          repeats = 5, 
+                          returnResamp="all",
+                          savePredictions = 'final') 
+
+```
+
+#### Training and Evaluation 
+
+```{r}
+target_var <- c('diagnosis')
+features <- train[,!(names(train) %in% target_var)]
+target <- train[,"diagnosis"]
+
+View(target)
+
+str(features)
+
+set.seed(2001)
+cancer_mdl <- train(x=features,
+                y=target$diagnosis,
+                trControl=fitControl,
+                method="C5.0",
+                verbose=TRUE)
+
+cancer_mdl
+#Accuracy was used to select the optimal model using the largest value.
+#The final values used for the model were trials = 20, model = tree and winnow = FALSE.
+```
+
+### Tune and Evaluation 
+```{r}
+cancer_predict = predict(cancer_mdl,tune,type= "raw")
+
+confusionMatrix(as.factor(cancer_predict), 
+                as.factor(tune$diagnosis), 
+                dnn=c("Prediction", "Actual"), 
+                mode = "sens_spec", positive = '1')
+
+# Confusion Matrix and Statistics
+# 
+#           Actual
+# Prediction  0  1
+#          0 51  4
+#          1  2 28
+#                                           
+#                Accuracy : 0.9294          
+#                  95% CI : (0.8527, 0.9737)
+#     No Information Rate : 0.6235          
+#     P-Value [Acc > NIR] : 8.812e-11       
+#                                           
+#                   Kappa : 0.8478          
+#                                           
+#  Mcnemar's Test P-Value : 0.6831          
+#                                           
+#             Sensitivity : 0.8750          
+#             Specificity : 0.9623          
+#          Pos Pred Value : 0.9333          
+#          Neg Pred Value : 0.9273          
+#              Prevalence : 0.3765          
+#          Detection Rate : 0.3294          
+#    Detection Prevalence : 0.3529          
+#       Balanced Accuracy : 0.9186          
+#                                           
+#        'Positive' Class : 1
+
+varImp(cancer_mdl)
+
+```
+
+
+### Predict Using the Tuning Data
+```{r}
+grid <- expand.grid(.winnow = c(TRUE,FALSE), 
+                    .trials=c(20,30,40), 
+                    .model=c("tree","rules"))
+set.seed(2001)
+cancer_mdl_tune <- train(x=features,
+                y=target$diagnosis,
+                tuneGrid=grid,
+                trControl=fitControl,
+                method="C5.0",
+                verbose=TRUE)
+
+cancer_mdl_tune
+cancer_mdl
+#399 samples
+# 30 predictor
+#  2 classes: '0', '1'
+#Accuracy was used to select the optimal model using the largest value.
+#The final values used for the model were trials = 20, model = tree and winnow
+# = FALSE.
+
+plot(cancer_mdl_tune)
+
+#Evaluate again with the tune data using the new model 
+cancer_predict_tune = predict(cancer_mdl_tune,tune,type= "raw")
+cancer_predict_tune
+
+confusionMatrix(as.factor(cancer_predict_tune), 
+                as.factor(tune$diagnosis), 
+                dnn=c("Prediction", "Actual"), 
+                mode = "sens_spec", positive = '1')
+
+# Confusion Matrix and Statistics
+# 
+#           Actual
+# Prediction  0  1
+#          0 51  2
+#          1  2 30
+#                                          
+#                Accuracy : 0.9529         
+#                  95% CI : (0.8839, 0.987)
+#     No Information Rate : 0.6235         
+#     P-Value [Acc > NIR] : 1.068e-12      
+#                                          
+#                   Kappa : 0.8998         
+#                                          
+#  Mcnemar's Test P-Value : 1              
+#                                          
+#             Sensitivity : 0.9375         
+#             Specificity : 0.9623         
+#          Pos Pred Value : 0.9375         
+#          Neg Pred Value : 0.9623         
+#              Prevalence : 0.3765         
+#          Detection Rate : 0.3529         
+#    Detection Prevalence : 0.3765         
+#       Balanced Accuracy : 0.9499         
+#                                          
+#        'Positive' Class : 1 
+
+```
+
+##Summary of Findings and Performance Between the Two Models:
+
+None of the model metrics (sensitivity, accuracy, positive predicted value, negative predicted value, prevalence, etc.) were significantly different between the two models. However, the model built from the tuned data had an increased accuracy of 95% compared the initial model built from the training data 93%. The model from the tuned data performed similarly in both sensitivity and specificity, indicating that the model is less likely to predict false negative cancer results, and has a high ability to detect true positive cancer results, as well as true negative results for a non cancerous mass.
+
+There were several insights I found through the model development phase, however. First, I was able to conclude that standard error for the area of the mass, the largest average value of the radius of the mass, the average concaved portions of the mass, the local variation in radius lengths across the mass, and the standard deviation of gra-scale values were some of the most important measures (or features) in the model's ability to predict whether the mass is malignant/benign.  More related the model development process, I also noticed in plotting the model, that model accuracy peaked at exactly 30 boosting interactions. As for any more meaningful insights, I don't know that the time we've had in class to cover this material has prepared me. However, I'd be interesting in learning about techniques to discover and assess (perhaps through graphical representations or other metrics) real-world interpretations and applications of the model's predictions.
+
+
+
+
+# DATASET MODEL #3: Spotify Music Popularity
+
+##Phase I
+```{r}
+#Independent Business Metric: Assuming that higher popularity results in higher song sales, if given the musical elements and measures about a track, can we predict which songs will perform the best in the charts?
+
+#Spotify Songs Dataset: 32833 spotify songs as observations, and 23 columns.
+```
+
+
+## Phase II
+### Data Preparation
+```{r}
+#Reading in Cancer data 
+spotify_data <- read_csv('/Users/catherineschuster/Desktop/Fall 2021/DS 3001/DS-3001-Main/05_ml_bootcamp/spotify_songs.csv')
+
+#Removing variables with two many unique values (i.e. song title) that will not help predict song popularity 
+drop <- c('track_id','track_name', 'track_artist', 'track_album_id',
+          'track_album_name', 'track_album_release_date',
+          'playlist_name','playlist_id','playlist_subgenre')
+spotify_data <- spotify_data[,!(names(spotify_data) %in% drop)]
+
+#Recode target variable: popularity >= 65 -> 1 and popularity < 65 ->
+spotify_data[,'track_popularity'] <- lapply(spotify_data[,'track_popularity'], 
+                                        function(x) ifelse(x>=65, 1, 0))
+spotify_data$track_popularity <- as.factor(spotify_data$track_popularity)
+str(spotify_data)
+```
+
+
+```{r}
+#Random sample of 40% of the dataset, to lessen model running times (I had to wait over an hour for some lines of code to execute)
+cutoff <- 32833 * .40
+spotify_data <- spotify_data[sample(nrow(spotify_data), cutoff), ]
+```
+
+
+### Scale/Center/Normalizing
+```{r}
+#Normalize quantitative variables
+normalize <- function(x){
+ (x - min(x)) / (max(x) - min(x))
+}
+
+num_cols <- names(select_if(spotify_data, is.numeric))
+
+spotify_data[num_cols] <- as_tibble(lapply(spotify_data[num_cols], normalize))
+```
+
+### One-hot Encoding
+```{r}
+#Encoding genre
+
+?one_hot
+unique(spotify_data$playlist_genre)
+spotify_data$playlist_genre <- as.factor(spotify_data$playlist_genre)
+
+spotify_data <- one_hot(as.data.table(spotify_data),cols = "playlist_genre",
+                        sparsifyNAs =TRUE,naCols = TRUE,
+                        dropCols =TRUE,dropUnusedLevels = TRUE) 
+View(spotify_data)
+nrow(spotify_data)
+```
+
+
+### Prevalance 
+```{r}
+#Prevalence of popularity
+prevalence <- table(spotify_data$track_popularity)[[2]]/
+  length(spotify_data$track_popularity)
+prevalence # 0.2154235
+```
+
+### Initial Model Building: Decision Tree   
+```{r}
+
+part_index_1 <- caret::createDataPartition(spotify_data$track_popularity,
+                                           times=1,
+                                           p = 0.70,
+                                           groups=1,
+                                           list=FALSE)
+View(part_index_1)
+dim(spotify_data)
+
+#Create training, tuning, and test set
+train <- spotify_data[part_index_1,]
+tune_and_test <- spotify_data[-part_index_1, ]
+
+#Use function again to create the tuning set 
+tune_and_test_index <- createDataPartition(tune_and_test$track_popularity,
+                                           p = .5,
+                                           list = FALSE,
+                                           times = 1)
+
+tune <- tune_and_test[tune_and_test_index, ]
+test <- tune_and_test[-tune_and_test_index, ]
+
+dim(train)
+dim(tune)
+dim(test)
+
+```
+
+
+#### Cross validation
+```{r}
+#Cross validation process 
+fitControl <- trainControl(method = "repeatedcv",
+                          number = 10,
+                          repeats = 5, 
+                          returnResamp="all",
+                          savePredictions = 'final') 
+
+
+```
+
+#### Training and Evaluation 
+
+```{r}
+target_var <- c('track_popularity')
+features <- train[,-"track_popularity"]
+target <- train[,"track_popularity"]
+
+View(target)
+
+str(features)
+
+set.seed(2001)
+
+spotify_mdl <- train(x=features,
+                y=target$track_popularity,
+                trControl=fitControl,
+                method="C5.0",
+                verbose=TRUE)
+
+spotify_mdl
+#Accuracy was used to select the optimal model using the largest value.
+#The final values used for the model were trials = 20, model = tree and winnow = FALSE.
+```
+
+### Tune and Evaluation 
+```{r}
+spotify_predict = predict(spotify_mdl,tune,type= "raw")
+
+confusionMatrix(as.factor(spotify_predict), 
+                as.factor(tune$track_popularity), 
+                dnn=c("Prediction", "Actual"), 
+                mode = "sens_spec", positive = '1')
+
+# Confusion Matrix and Statistics
+# 
+#           Actual
+# Prediction    0    1
+#          0 1509  388
+#          1   37   36
+#                                           
+#                Accuracy : 0.7843          
+#                  95% CI : (0.7654, 0.8022)
+#     No Information Rate : 0.7848          
+#     P-Value [Acc > NIR] : 0.5348          
+#                                           
+#                   Kappa : 0.0872          
+#                                           
+#  Mcnemar's Test P-Value : <2e-16          
+#                                           
+#             Sensitivity : 0.08491         
+#             Specificity : 0.97607         
+#          Pos Pred Value : 0.49315         
+#          Neg Pred Value : 0.79547         
+#              Prevalence : 0.21523         
+#          Detection Rate : 0.01827         
+#    Detection Prevalence : 0.03706         
+#       Balanced Accuracy : 0.53049         
+#                                           
+#        'Positive' Class : 1
+       
+varImp(spotify_mdl)
+
+```
+
+
+
+### Predict Using the Tuning Data
+```{r}
+grid <- expand.grid(.winnow = c(TRUE,FALSE), 
+                    .trials=c(20,30,40), 
+                    .model=c("tree","rules"))
+set.seed(2001)
+
+#This took a very very long time to run (over 10/15 mins)
+spotify_mdl_tune <- train(x=features,
+                y=target$track_popularity,
+                tuneGrid=grid,
+                trControl=fitControl,
+                method="C5.0",
+                verbose=TRUE)
+
+spotify_mdl_tune
+spotify_mdl
+
+#Accuracy was used to select the optimal model using the largest value.
+#The final values used for the model were trials = 20, model = tree and winnow
+# = FALSE.
+
+plot(spotify_mdl_tune)
+
+#Evaluate again with the tune data using the new model 
+spotify_predict_tune = predict(spotify_mdl_tune,tune,type= "raw")
+spotify_predict_tune
+
+confusionMatrix(as.factor(spotify_predict_tune), 
+                as.factor(tune$track_popularity), 
+                dnn=c("Prediction", "Actual"), 
+                mode = "sens_spec", positive = '1')
+
+# Confusion Matrix and Statistics
+# 
+#           Actual
+# Prediction    0    1
+#          0 1495  375
+#          1   51   49
+#                                           
+#                Accuracy : 0.7838          
+#                  95% CI : (0.7649, 0.8018)
+#     No Information Rate : 0.7848          
+#     P-Value [Acc > NIR] : 0.5565          
+#                                           
+#                   Kappa : 0.1143          
+#                                           
+#  Mcnemar's Test P-Value : <2e-16          
+#                                           
+#             Sensitivity : 0.11557         
+#             Specificity : 0.96701         
+#          Pos Pred Value : 0.49000         
+#          Neg Pred Value : 0.79947         
+#              Prevalence : 0.21523         
+#          Detection Rate : 0.02487         
+#    Detection Prevalence : 0.05076         
+#       Balanced Accuracy : 0.54129         
+#                                           
+#        'Positive' Class : 1          
+
+```
+
+##Summary of Findings and Performance Between the Two Models:
+The initial model built from the training data had an overall accuracy of 0.7843 (~80%) and a balanced accuracy of 0.5305 (~53%), as well as a specificity of .976, meaning it has a high ability to designate an individual song as popular on the training data, and will predict fewer false 'populars'. However, there is a tradeoff that exists, as its sensitivity was extremely low, at .085. This means that while the inital model was successful at predicting true popular songs, it is poor at identifying songs that are truly unpopular. 
+
+The model built from the tuning data, was very similar in comparison to this initial evaluation in terms of accuracy, sensitivity and specificity. When these metrics are compared to the initial model, the initial model performed better by a hair (two/three decimal points)
+
+My most interesting findings from this model were that the energy, acousticness, liveliness,  duration, tempo, loudness,  instrumentalness, and danceability, of a track are among the top indicators of a popular song. While I would have predicted that whether or not the song was in the pop genre moreover, this is actually least important variable in the model at predicting song popularity. Rather, my model suggests that edm and r&b as a genres moreso help indicate characteristics of a popular song.
+   
