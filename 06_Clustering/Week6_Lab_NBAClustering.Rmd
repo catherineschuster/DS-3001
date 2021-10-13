@@ -1,0 +1,224 @@
+---
+title: "Week6 Lab: NBA Clustering"
+author: "Catherine Schuster"
+date: "10/12/2021"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    theme: cosmo
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+## Project Approach, Methodology, and Rationale
+
+To determine which NBA Players are promising acquisitions to the team —— meaning they are statistically high performing yet underpaid —— a K-means clustering model is appropriate. In ensuring our clustering algorithm is concerned with features that are most indicative of both salary and performance, the first step is to investigate which player statistics have the highest correlation with salary. These features will be used to build the K-means clustering model.
+
+In the process of building the model, it is first crucial to calculate and visualize the optimal number of clusters to explain the players. At this optimal number of centers, It will then be investigated, through graphing and visualization, how each cluster explains player profile. 
+
+Visualizing our clusters against both salary and a particularly indicative performance metric will be used to indicate those players that are valuable additions to the team, and underpaid enough that they are likely to transition to our team when offered a higher salary
+
+```{r, include=FALSE}
+#Importing Libraries
+
+library(e1071)
+library(tidyverse)
+library(plotly)
+library(htmltools)
+library(devtools)
+library(caret)
+library(NbClust)
+```
+
+```{r pressure, include=FALSE}
+#Reading in csv files
+
+nba_salaries <- read_csv("/Users/catherineschuster/Desktop/Fall 2021/DS 3001/DS-3001-Main/data/nba_salaries_21.csv")
+nba_data <- read_csv("/Users/catherineschuster/Desktop/Fall 2021/DS 3001/DS-3001-Main/data/nba2020-21.csv")
+
+View(nba_salaries)
+View(nba_data)
+
+```
+
+```{r, include=FALSE}
+#Merging datasets
+nba_full <- merge(nba_salaries,nba_data, by="Player")
+View(nba_full)
+str(nba_full)
+```
+
+## Calculating Feature Correlation with Salary
+```{r, echo=FALSE}
+#Calculating Correlation
+
+cor(nba_full[,unlist(lapply(nba_full, is.numeric))], use="complete.obs")[1,]
+```
+This output contains the correlation of each variable in the data set with salary. 
+To subset to only those features most explanatory of salary, the data to be used in the model will only comprise of features based from correlation cuttoff of .55. PTS (Points), AST (Assists), TOV (Turnovers), FTA (Free throws attempted), FGA (Field goals attempted), FT (Free throws made), and FG (Field goals made) will be used to cluster our players in the model. This data post-normalization and ready for model fitting is exhibited below:
+
+```{r, echo=FALSE}
+#Subsetting NBA data to only those variables most correlated with salary as our clustering data.
+
+clust_data = nba_full[, c('PTS', 'AST', 'TOV', 'FTA', 'FGA', 'FT', 'FG')]
+
+#Normalizing numerical values in the clustering data.
+
+normalize <- function(x){
+ (x - min(x)) / (max(x) - min(x))
+}
+
+num_cols <- names(select_if(clust_data, is.numeric))
+
+clust_data[num_cols] <- as_tibble(lapply(clust_data[num_cols], normalize))
+head(clust_data)
+```
+
+## Determining the Optimal Number of Clusters
+### Elbow Curve Method:
+
+```{r, include=FALSE}
+#Use explained variance function to evaluate several different number of clusters
+explained_variance = function(data_in, k){
+  
+  # Running the kmeans algorithm.
+  set.seed(1)
+  kmeans_obj = kmeans(data_in, centers = k, algorithm = "Lloyd", iter.max = 30)
+  
+  # Variance accounted for by clusters:
+  # var_exp = intercluster variance / total variance
+  var_exp = kmeans_obj$betweenss / kmeans_obj$totss
+  var_exp  
+}
+
+explained_var = sapply(1:10, explained_variance, data_in = clust_data)
+elbow_data = data.frame(k = 1:10, explained_var)
+
+```
+
+```{r, echo=FALSE}
+#Elbow chart of the output to determine optimal number of clusters for the model.
+ggplot(elbow_data, 
+       aes(x = k,  
+           y = explained_var)) + 
+  geom_point(size = 4) +           #<- sets the size of the data points
+  geom_line(size = 1) +            #<- sets the thickness of the line
+  xlab('k') + 
+  ylab('Inter-cluster Variance / Total Variance') + 
+  theme_light() 
+```
+
+The elbow curve suggests that three is the optimal number of clusters.
+
+### NbClust Method
+
+```{r, include=FALSE, warning=FALSE}
+#Use NbClust method to confirm that 3 clusters is optimal. 
+
+(nbclust = NbClust(data = clust_data, method = "kmeans"))
+
+#Display the results visually 
+freq_k = nbclust$Best.nc[1,]
+freq_k = data.frame(freq_k)
+
+```
+```{r, echo=FALSE}
+# Plot as a histogram.
+ggplot(freq_k,
+       aes(x = freq_k)) +
+  geom_bar() +
+  scale_x_continuous(breaks = seq(0, 15, by = 1)) +
+  scale_y_continuous(breaks = seq(0, 12, by = 1)) +
+  labs(x = "Number of Clusters",
+       y = "Number of Votes",
+       title = "Cluster Analysis")
+```
+
+
+The NBClust method equally recommends both 2 and 3 clusters. 
+
+Thus, the model will be run with both two and three clusters, and the best performing model will be used.
+
+## Model Building and Explained Variance With 2 Clusters
+```{r}
+# Model with 2 clusters
+
+set.seed(17)
+kmeans_2 = kmeans(clust_data, centers = 2, algorithm = "Lloyd")
+
+#Evaluate the quality of the clustering 
+betweenss_2 = kmeans_2$betweenss
+
+# Total variance, "totss" is the sum of the distances between all the points in the data set.
+totss_2 = kmeans_2$totss
+
+# Variance accounted for by clusters.
+(var_exp_2 = betweenss_2 / totss_2)
+```
+The percentage of variation that is explained by the model with two centers is 59%.
+
+## Model Building and Explained Variance With 3 Clusters
+```{r}
+# Model with 3 clusters
+
+set.seed(17)
+kmeans_3 = kmeans(clust_data, centers = 3, algorithm = "Lloyd")
+
+#Evaluate the quality of the clustering 
+betweenss_3 = kmeans_3$betweenss
+
+# Total variance, "totss" is the sum of the distances between all the points in the data set.
+totss_3 = kmeans_3$totss
+
+# Variance accounted for by clusters.
+(var_exp_3 = betweenss_3 / totss_3)
+
+```
+The percentage of variation that is explained by the model with three centers is 77%.
+
+The Model built with three centers has an explained variance of .77 (77%), compared to the model with two centers, which has a much lower explained variance of .59 (59%). Three clusters is the optimal choice for this data.
+
+```{r, include=FALSE}
+#Joining Clusters to original data frame
+
+nba_full$cluster <- kmeans_3$cluster
+
+nba_full
+```
+
+## Visualizing Clusters
+```{r, echo=FALSE, warning=FALSE}
+# Visualize clusters, salary, and points in 3D with the following code.
+
+# View our data.
+View(nba_full)
+
+nba_full$Player <- gsub("[^[:alnum:]]", "", nba_full$Player)
+
+# Use plotly to do a 3d imaging 
+
+fig <- plot_ly(nba_full, 
+               type = "scatter",
+               mode="markers",
+               symbol = ~cluster,
+               color = ~cluster,
+               colors = c('red', 'blue', 'green'),
+               x = ~nba_full[,'2020-21'], 
+               y = ~PTS,
+               text = ~paste('Player:',Player,
+                             "Position:", Pos))
+
+fig
+
+```
+The above graph shows the relationship between player salary by player points, colored by cluster. My rationale in visualizing the clusters derived from the subsetted data with these axes is that Points (PTS) is most indicative of the performance of a player and also one of the most highly correlated features with salary. Thus, graphing Salary by Points made will allow us to determine those players that are high performing yet underpaid.
+
+The clusters can be interpreted to represent groups of varying skill sets among NBA players, as well as a moderate measure of player salary. The blue group (cluster 2), represents players with the lowest point performance, and are paid a strict range of low salaries. The red group (cluster 1), represents players with a moderate/average range of point performance relative to the entire population, and are paid a moderately varied range of salaries. The green group (cluster 3), represents players with the greatest point performance, yet having the greatest disparity in salary between players in its group. In other words, players in cluster 3 perform at relatively equal levels, yet there is the widest range in salary across the group, and the greatest maximum salary of the entire population.
+
+## Conclusion
+In determining players with the greatest potential payoff to the team, it is important to look for players in cluster 3 alone. Cluster 3 is the subset of the population that is highest performing. Furthermore, within cluster 3, the most likely to be tempted to convert to our team are those that are paid the lowest of the salary range in this cluster. Thus, I suggest that players Zion Williamson, Luka Doni, and Trae Young be priority recruits for our team. These are players with some of the highest point statistics in their group, yet paid the lowest salaries for their level of performance. Williamson, Doni, and Young are comparable and —— in some cases, higher performing —— to other players in cluster 3 that are paid almost four times as much. Moreover, shockingly, these players have about 57 times the number of points that other players do with similar / equal salaries. Thus, from the model and appropriate visualizations, I conclude that Williamson, Doni, and Young, as well as similar player profiles, are most valuable acquisitions to our team.
+

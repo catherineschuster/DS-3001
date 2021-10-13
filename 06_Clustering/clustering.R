@@ -4,31 +4,29 @@
 
 #### Slide 21: Step 1: load packages and data ####
 
-# Install packages.
-install.packages("devtools")     #<- package used to run clustering analysis
-
 # Load libraries.
-library(e1071)
+#library(e1071)
 library(tidyverse)
 library(plotly)
 library(htmltools)
 library(devtools)
+library(caret)
+library(NbClust)
 
-library(help = "e1071")#<- learn about all the functionality of the package,
-#   be well informed about what you're doing
+
 
 #==================================================================================
 
 #### Slide 22: Step 1: load packages and data ####
 
-house_votes_Dem = read_csv("~/Desktop/Fall 2021/DS 3001/DS-3001-Main/data/house_votes_Dem.csv")
+house_votes_Dem = read_csv("/Users/catherineschuster/Desktop/Fall 2021/DS 3001/DS-3001-Main/06_Clustering/house_votes_Dem.csv")
 
 # What does the data look like?
 View(house_votes_Dem)
 str(house_votes_Dem)
 table(house_votes_Dem$party.labels)
 
-house_votes_Rep = read_csv("/Users/catherineschuster/Desktop/Fall 2021/DS 3001/DS-3001-Main/data/house_votes_Rep.csv")
+house_votes_Rep = read_csv("/Users/catherineschuster/Desktop/Fall 2021/DS 3001/DS-3001-Main/06_Clustering/house_votes_Rep.csv")
 
 table(house_votes_Rep$party.labels)
 View(house_votes_Rep)
@@ -64,6 +62,7 @@ head(kmeans_obj_Dem)
 # Tell R to read the cluster labels as factors so that ggplot2 
 # (the graphing package) can read them as category labels instead of 
 # continuous variables (numeric variables).
+
 party_clusters_Dem = as.factor(kmeans_obj_Dem$cluster)
 
 # What does the kmeans_obj look like?
@@ -155,9 +154,9 @@ fig <- plot_ly(house_votes_color_Dem,
                text = ~paste('Representative:',Last.Name,
                              "Party:",party.labels))
 
-color = c('#0C4B8E','#BF382A')
+
 fig
-dev.off()
+dev.off() #sets graphics back to default
 
 #==================================================================================
 
@@ -243,7 +242,10 @@ ggplot(elbow_data_Dem,
   xlab('k') + 
   ylab('Inter-cluster Variance / Total Variance') + 
   theme_light()
-
+# Tradeoff between complexity and accuracy
+# The more complexity put into the model, the less efficiency added to the model 
+# (the smaller the increase in variance explained)
+# Diminishing returns
 #==================================================================================
 
 #### Slide 50: NbClust: k by majority vote ####
@@ -309,7 +311,7 @@ str(tree_data)
 tree_data[,c(1,5)] <- lapply(tree_data[,c(1,5)], as.factor)
 # do we need to normalize? 
 
-library(caret)
+
 # Split 
 train_index <- createDataPartition(tree_data$party.labels,
                                            p = .7,
@@ -360,6 +362,7 @@ confusionMatrix(as.factor(dt_predict_1),
 tree_data_nc <- tree_data[,-5]
 str(tree_data_nc)
 
+
 train_index <- createDataPartition(tree_data$party.labels,
                                    p = .7,
                                    list = FALSE,
@@ -389,6 +392,20 @@ party_dt <- train(x=features,
 # This is more or less a easy target but the clusters are very predictive. 
 party_dt
 varImp(party_dt)
+
+dt_predict_1 = predict(party_dt,tune,type= "raw")
+
+confusionMatrix(as.factor(dt_predict_1), 
+                as.factor(tune$party.labels), 
+                dnn=c("Prediction", "Actual"), 
+                mode = "sens_spec")
+
+dt_predict_t = predict(party_dt,test,type= "raw")
+
+confusionMatrix(as.factor(dt_predict_t), 
+                as.factor(test$party.labels), 
+                dnn=c("Prediction", "Actual"), 
+                mode = "sens_spec")
 
 #didn't really make a huge difference, what could we have done differently? 
 #==================================================================================
