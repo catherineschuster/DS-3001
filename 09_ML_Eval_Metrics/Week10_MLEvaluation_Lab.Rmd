@@ -1,0 +1,242 @@
+---
+title: "Eval_Lab"
+author: "Catherine Schuster"
+date: "11/3/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+# Part 1. Select either as a lab group or individuals a dataset that is of interest to you/group. Define a question that can be answered using classification, specifically kNN, for the dataset.
+
+For this assignment, I would like to run kNN classification on the winequality-red-ddl data set, using the features used to categorize each wine, to answer/distinguish which wines are 'high/good' quality from those which are 'poor/bad' quality. 
+
+Among the features available to assess the quality of wines, the classification model will be build from these key variables: "fixed acidity", "volatile acidity", "citric acid", "residual sugar", "chlorides", "free sulfur dioxide", "total sulfur dioxide", "density", "pH", "sulphates", and "alcohol"
+
+In my attempt to answer this question, I will define a ‘good quality’ wine (1) as one with a quality score of 7 or higher, and a 'poor quality' wine (0) if it had a score of less than 7.
+
+# Import Packages and Clean Data
+```{r}
+library(tidyverse)
+library(caret)
+library(class)
+library(gmodels)
+library(RColorBrewer)
+library(ROCR)
+library(MLmetrics)
+
+wine_data <- read_csv('/Users/catherineschuster/Desktop/Fall 2021/DS 3001/DS-3001-Main/data/winequality-red-ddl.csv')
+
+str(wine_data)
+
+#Remove NA's
+table(is.na(wine_data))
+wine_data <- wine_data[complete.cases(wine_data), ]
+table(is.na(wine_data))
+
+
+#Assign Cuttoff and Create Outcome Variable
+
+# poor = 3, poor-ish = 4, ave = 5, average-ish = 6, good = 7, excellent = 8
+table(c(wine_data$text_rank, wine_data$quality))
+
+wine_data$outcome <- recode(wine_data$text_rank,  #Above average is positive class
+                            'good' = 1,
+                            'excellent' = 1,
+                            'poor' = 0,         #Below average is negative class
+                            'poor-ish' = 0,
+                            'ave' = 0,
+                            'average-ish' = 0)
+
+table(wine_data$outcome)
+wine_data$outcome <- as.factor(wine_data$outcome)
+
+#Drop quality column, drop text_rank column
+str(wine_data)
+wine_data <- wine_data[,-c(12,13)]
+str(wine_data)
+
+table(wine_data$outcome)
+table(wine_data$outcome)[2] / sum(table(wine_data$outcome))
+```
+Baserate : Proportion of 1's (above average wine) in the data set ~= .14
+
+
+# Part 2. In consideration of all the metrics we discussed select a few (threeish) key metrics that should be tracked given the question you are working to solve.
+
+The metrics I would like to use to assess the performance of the classification of good vs poor wines are:
+
+1) Sensitivity - In this project, I set out to distinguish really good wines from mediocre or bad wines. Therefore, sensitivity, the model's ability to correctly label a true positive (correctly label a good wine as a good wine) is an imperative metric for this question. Ideally, I would like the model's sensitivity to be greater than 75% for it to be considered successful in this way.
+
+2) Log Loss - Because log loss heavily penalizes classifications that are highly confident in the wrong direction, this is a sound metric to assess both the certainty that wines are accurately classified with this model and identify uncertainties within the model. 
+
+3) F1 Score - F1 Score is a more useful metric than accuracy especially when you have an uneven class distribution in your data. Because this is an unbalanced data set with a base prevalence rate of 14% (there are far many moor poor wines than good wines), F1 score is another metric I would like to prioritize in my analysis. 
+
+# Part 3. Build a kNN model and evaluate the model using the metrics discussed in class (Accuracy, TPR, FPR, F1, Kappa, LogLoss and ROC/AUC). Make sure to calculate the baserate or prevalence to provide a reference for some of these measures. Even though you are generating many of the metrics we discussed summarize the output of the key metrics you established in part 2.
+
+### Partion Data 
+```{r}
+set.seed(2001)
+split_index <- createDataPartition(wine_data$outcome, p = .8, #selects the split, 80% training 20% for test 
+                                  list = FALSE,#output of the data, we don't want a list
+                                  times = 1)
+
+train_data <- wine_data[split_index,]
+dim(train_data)
+
+test <- wine_data[-split_index,]
+dim(test)
+
+```
+
+### Run KNN
+
+```{r}
+wine_knn <- train(outcome~.,
+                  data = train_data,
+                  method="knn",
+                  tuneLength=10,
+                  trControl= trctrl,#cv method above, will select the optimal K
+                  preProcess="scale")
+
+```
+
+### Metrics and Evaluation
+
+```{r}
+wine_eval <-(predict(wine_knn, newdata = test))
+wine_eval_prob <- predict(wine_knn, newdata = test, type = "prob")
+
+View(wine_eval)
+View(wine_eval_prob)
+
+
+confusionMatrix(wine_eval, test$outcome, positive = "1", dnn=c("Prediction", "Actual"), 
+                mode = "sens_spec")
+
+# Confusion Matrix and Statistics
+# 
+#           Actual
+# Prediction   0   1
+#          0 246  27
+#          1   9  13
+#                                          
+#                Accuracy : 0.878          
+#                  95% CI : (0.8351, 0.913)
+#     No Information Rate : 0.8644         
+#     P-Value [Acc > NIR] : 0.280396       
+#                                          
+#                   Kappa : 0.3575         
+#                                          
+#  Mcnemar's Test P-Value : 0.004607       
+#                                          
+#             Sensitivity : 0.32500        
+#             Specificity : 0.96471        
+#          Pos Pred Value : 0.59091        
+#          Neg Pred Value : 0.90110        
+#              Prevalence : 0.13559        
+#          Detection Rate : 0.04407        
+#    Detection Prevalence : 0.07458        
+#       Balanced Accuracy : 0.64485        
+#                                          
+#        'Positive' Class : 1           
+#        
+
+wine_eval_prob$test <- test$outcome
+View(wine_eval_prob)
+
+(error = mean(wine_eval != test$outcome)) #overall error rate = 0.122
+
+```
+
+### ROC/AUC
+```{r}
+
+wine_eval <- tibble(pred_class=wine_eval,
+                    pred_prob=wine_eval_prob$`1`,
+                    target=as.numeric(test$outcome))
+
+str(wine_eval)
+View(wine_eval)
+
+pred <- prediction(wine_eval$pred_prob,wine_eval$target)
+View(pred)
+
+kNN_perf <- performance(pred,"tpr","fpr")
+
+plot(kNN_perf, colorize=TRUE) # The ROC curve appears fairly successful.
+
+kNN_perf_AUC <- performance(pred,"auc")
+
+print(kNN_perf_AUC@y.values)
+```
+The AUC for this model is 0.81. Though this is not 'excellent' (0.9-1.0), it shows that the model is 'good' at distinguishing between classes.
+
+
+### LogLoss
+```{r}
+LogLoss(as.numeric(wine_eval$pred_prob), as.numeric(test$outcome))
+#We want this number to be rather close to 0, so this is a pretty terrible result. 
+```
+
+### F1 Score 
+```{r}
+pred_1 <- ifelse(wine_eval_prob$`1` < 0.5, 0, 1)
+View(pred_1)
+F1_Score(y_pred = pred_1, y_true = wine_eval_prob$test, positive = "1")
+```
+Very poor. 
+
+Metric Performance in statistical terms (to be interpreted in context in part 6):
+
+1) Sensitivity = 0.325   
+Measures the proportion of positive cases that are classified as positive. Ideally, this proportion should be higher, as currently only ~33% of true positive cases are predicted as positive.
+
+2) Log Loss = 14.24754 
+Log loss is indicative of how close the prediction probability is to the corresponding true value. A log loss of 14 indicates that the predicted probabilities diverge quite significantly from their true value. This is a poor result.
+
+3) F1 Score = 0.4193548
+Ideally, this number should be as close to 1 as possible. F1 can be interpreted to mean how precise your classifier is (how many instances it classifies correctly), as well as how robust it is (that it does not miss a significant number of instances). Therefore, a low F1 shows that this model is quite poor in both precision and recall metrics.
+
+# Part 4. Consider where miss-classification errors are occurring, is there a pattern? If so discuss this pattern and why you think this is the case.
+
+```{r}
+View(wine_eval_prob)
+```
+
+Honestly, there is not much of a trend in the model's predicted probabilities and its true class. Some very low probabilities within a class were true class, whereas other very high probabilities were spot on. It is rather disappointing to see this result.
+
+However, it is clear that of the probabilities greater than .5, most of the probabilities closest to 1 (more certain) fell in the '0' class, while probabilities in the '1' class were closer to .5 (less certain). This can be explained by the disproportionate numbers of classes in the original data set. 
+
+
+# Part 5. Based on your exploration in Part 3/4, change the threshold using the function provided (in the in-class example), what differences do you see in the evaluation metrics? Speak specifically to the metrics that are best suited to address the question you are trying to answer.
+
+```{r}
+adjust_thres <- function(x, y, z) {
+  #x=pred_probablities, y=threshold, z=test_outcome
+  thres <- as.factor(ifelse(x > y, 1,0))
+  confusionMatrix(thres, z, positive = "1", dnn=c("Prediction", "Actual"), mode = "everything")
+}
+
+adjust_thres(wine_eval_prob$`1`,.60, test$outcome) 
+adjust_thres(wine_eval_prob$`1`,.7, test$outcome)
+adjust_thres(wine_eval_prob$`1`,.4, test$outcome)
+adjust_thres(wine_eval_prob$`1`,.3, test$outcome)
+```
+Increasing the threshold dramatically drops the sensitivity, while decreasing the threshold dramatically increases the sensitivity. This can be explained by my answer to the previous part, where of the probabilities greater than .5, most of the probabilities closest to 1 (more certain) fell in the '0' class, while probabilities in the '1' class were closer to .5 (less certain). The disproportionate numbers of classes in the original data set caused those true positive data points to be assigned lower probabilities, and thus the sensitivity increased as the threshold decreased. 
+
+Sensitivity, accuracy, and other metrics do not necessarily change or trend in a certain direction.
+
+# Part 6. Summarize your findings speaking through your question, what does the evaluation outputs mean when answering the question? Also, make recommendations on improvements.
+
+Overall, the selected metrics indicated many weak spots in the current model. Despite an accuracy of 88%, it is important to note that many more robust classification metrics suggested that the model is quite poor in accurately classifying high quality wines from poor quality wines.
+
+A low sensitivity indicates that truly excellent wines were failed to be classified as such, and therefore showing that the model is not reliable in answering the initial question (distinguishing good wines from bad wines). A high specificity, however, showed that the model is good at identifying when a wine is not high quality. This does not mean much, however, as the majority of the wines in the data set are true 'negative' (poor) wines.
+
+A high log loss and a loss F1 score emphasized the model's inability to accurately classify the wines for their respective qualities. In other words, the predicted qualities of the wines diverged quite significantly from their true rated quality. Overall, the was not precise in correctly classifying the quality of wines, and missed a significant number of instances of high quality wines.
+
+Recommendations for improvement stem from the fact that the initial data set is highly skewed (i.e. the percent of true positive (above average wine) in the data set is 14%), and thus the kNN classifier got a low miss-classification rate simply by choosing the majority class, low-quality wines. In such a situation, it would be best to gather more wholistic data and potentially lower the threshold to account for this skew.
+
